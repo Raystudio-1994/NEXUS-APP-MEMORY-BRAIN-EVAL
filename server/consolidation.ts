@@ -4,6 +4,10 @@ import { getEmbedding, cosineSimilarity, computeSha256 } from './embeddings';
 import { syncMemoryToVault } from './vaultSyncer';
 import { GoogleGenAI } from '@google/genai';
 import { MemoryItem, ProvenanceAnchor } from '../src/types/memory';
+import { runSanerConsolidationPipeline, detectFrictionEpisodes, type FrictionPattern } from './saner/friction';
+
+export { runSanerConsolidationPipeline, detectFrictionEpisodes };
+export type { FrictionPattern };
 
 /**
  * Pure TypeScript density-based DBSCAN clustering algorithm.
@@ -246,7 +250,7 @@ Format your response as a valid JSON with "statement", "subject", "predicate", "
       VALUES (?, ?, ?, ?, ?, ?)
     `);
     const updateEpisodic = db.prepare(`
-      UPDATE memories SET lifecycle_state = "superseded", valid_to = ? WHERE id = ?
+      UPDATE memories SET lifecycle_state = 'superseded', valid_to = ? WHERE id = ?
     `);
 
     for (const source of cluster) {
@@ -298,13 +302,23 @@ Format your response as a valid JSON with "statement", "subject", "predicate", "
     });
   }
 
-  console.log(`REM pipeline complete: ${decayedCount} memories decayed, ${synthesizedResults.length} semantic memories synthesized.`);
+  // 7. Run SANER procedural consolidation pass
+  let sanerResult = { procedures_synthesized: 0, procedures: [] as any[] };
+  try {
+    sanerResult = await runSanerConsolidationPipeline();
+  } catch (sanerErr) {
+    console.warn('SANER procedural consolidation notice:', sanerErr);
+  }
+
+  console.log(`REM pipeline complete: ${decayedCount} memories decayed, ${synthesizedResults.length} semantic memories synthesized, ${sanerResult.procedures_synthesized} procedural rules consolidated.`);
 
   return {
     status: 'success',
     processed_count: activeEpisodic.length,
     decayed_count: decayedCount,
     synthesized_count: synthesizedResults.length,
+    procedural_count: sanerResult.procedures_synthesized,
+    procedures: sanerResult.procedures,
     clusters: synthesizedResults
   };
 }

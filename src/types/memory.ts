@@ -124,6 +124,12 @@ export interface CompiledContextCapsule {
   timestamp: string;
   token_budget: number;
   tokens_used: number;
+  cache_hit?: boolean;
+  entropy?: {
+    shannon_entropy: number;
+    normalized_entropy: number;
+    perplexity: number;
+  };
   state_summary: {
     current_project: string;
     active_branch: string;

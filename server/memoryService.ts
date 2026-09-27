@@ -6,6 +6,7 @@ import { MemoryItem, MemoryEvent, ProvenanceAnchor, CompiledContextCapsule } fro
 import { ScoringWeights, defaultWeights } from './apex/weights';
 import { upsertVector, knnSearch } from './vectorStore';
 import { kuzuUpsertMemory, kuzuCreateEdge } from './graphStore';
+import { globalContextCache } from './cache/contextCache';
 
 /**
  * Normalizes string tags to an array.
@@ -494,6 +495,12 @@ export async function compileContext(
   tokenBudget: number = 1500,
   weightsOverride?: Partial<ScoringWeights>
 ): Promise<CompiledContextCapsule> {
+  const cacheKey = globalContextCache.generateKey(query, tokenBudget, weightsOverride);
+  const cached = globalContextCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const weights: ScoringWeights = { ...defaultWeights, ...(weightsOverride || {}) };
   const memories = getMemories(); // Retrieve all candidates (active + historical if relevant)
   const queryEmbedding = await getEmbedding(query);
@@ -559,6 +566,22 @@ export async function compileContext(
     };
   }).sort((a, b) => b.utility - a.utility);
 
+  // Calculate Shannon Entropy across candidate utility distribution
+  const totalUtility = scored.reduce((acc, item) => acc + item.utility, 0);
+  let shannonEntropy = 0;
+  if (totalUtility > 0 && scored.length > 0) {
+    for (const item of scored) {
+      const p = item.utility / totalUtility;
+      if (p > 0) {
+        shannonEntropy -= p * Math.log2(p);
+      }
+    }
+  }
+  const maxPossibleEntropy = scored.length > 1 ? Math.log2(scored.length) : 1;
+  const normalizedEntropy = maxPossibleEntropy > 0 ? parseFloat((shannonEntropy / maxPossibleEntropy).toFixed(4)) : 0;
+  const perplexity = parseFloat(Math.pow(2, shannonEntropy).toFixed(4));
+  shannonEntropy = parseFloat(shannonEntropy.toFixed(4));
+
   // 0/1 Greedy Knapsack token packing
   let currentTokens = 0;
   const selected: MemoryItem[] = [];
@@ -572,12 +595,18 @@ export async function compileContext(
 
   // Construct context response capsule
   const now = new Date().toISOString();
-  return {
+  const capsule: CompiledContextCapsule = {
     query_id: `q-${Date.now().toString(36)}`,
     query,
     timestamp: now,
     token_budget: tokenBudget,
     tokens_used: currentTokens + 150, // with boilerplate
+    cache_hit: false,
+    entropy: {
+      shannon_entropy: shannonEntropy,
+      normalized_entropy: normalizedEntropy,
+      perplexity: perplexity
+    },
     selected_ids: selected.map(s => s.id),
     state_summary: {
       current_project: 'Nexus-Memory-Fabric',
@@ -611,6 +640,11 @@ export async function compileContext(
       }
     }
   };
+
+  // Cache compiled capsule
+  globalContextCache.set(cacheKey, capsule);
+
+  return capsule;
 }
 
 /**

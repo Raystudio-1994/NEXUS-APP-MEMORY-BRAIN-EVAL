@@ -1,5 +1,7 @@
+import { createRequire } from 'module';
 import { getDb } from './db';
 
+const require = createRequire(import.meta.url);
 let vecInitialized = false;
 
 /**

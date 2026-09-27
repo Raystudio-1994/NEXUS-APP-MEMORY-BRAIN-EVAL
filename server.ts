@@ -6,7 +6,8 @@ import { createServer as createViteServer } from 'vite';
 import { initDb } from './server/db';
 import memoryRoutes from './server/routes/memory';
 import { extractSemanticMemories, compileContext, verifyProvenance } from './server/memoryService';
-import { rem_nightly_consolidation_pipeline } from './server/consolidation';
+import { rem_nightly_consolidation_pipeline, runSanerConsolidationPipeline } from './server/consolidation';
+import { globalContextCache } from './server/cache/contextCache';
 import { startRemCron } from './server/cron/remCron';
 import { runEvalHarness, getLatestEvalRun, getEvalHistory } from './server/eval/harness';
 import { initEvalTables } from './server/eval/store';
@@ -109,6 +110,35 @@ async function startServer() {
     }
   });
 
+  // SANER procedural consolidation trigger
+  app.post('/api/saner/run', async (req, res) => {
+    try {
+      const result = await runSanerConsolidationPipeline();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: 'SANER consolidation failed', details: err.message });
+    }
+  });
+
+  // Context Cache stats
+  app.get('/api/cache/stats', (req, res) => {
+    try {
+      res.json(globalContextCache.getStats());
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to retrieve cache stats', details: err.message });
+    }
+  });
+
+  // Context Cache clear
+  app.post('/api/cache/clear', (req, res) => {
+    try {
+      globalContextCache.clear();
+      res.json({ success: true, message: 'Context compiler cache cleared.' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to clear cache', details: err.message });
+    }
+  });
+
   // Consolidation status query
   app.get('/api/consolidation/status', (req, res) => {
     try {
@@ -119,7 +149,7 @@ async function startServer() {
         unconsolidated_episodic_memories: result.count,
         interval: process.env.NEXUS_CONSOLIDATION_INTERVAL || '3600',
         service_status: process.env.NEXUS_CONSOLIDATION !== '0' ? 'ACTIVE' : 'DISABLED',
-        consolidator: 'DBSCAN + exponential decay model'
+        consolidator: 'DBSCAN + exponential decay model + SANER procedural engine'
       });
     } catch (err: any) {
       res.status(500).json({ error: 'Consolidation status query failed', details: err.message });
