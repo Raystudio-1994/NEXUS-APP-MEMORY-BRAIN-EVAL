@@ -102,7 +102,7 @@ async function startServer() {
   // Consolidation status query
   app.get('/api/consolidation/status', (req, res) => {
     try {
-      const activeEpisodicStmt = sqliteDb.prepare('SELECT COUNT(*) as count FROM memories WHERE tier = 2 AND lifecycle_state = "active"');
+      const activeEpisodicStmt = sqliteDb.prepare("SELECT COUNT(*) as count FROM memories WHERE tier = 2 AND lifecycle_state = 'active'");
       const result = activeEpisodicStmt.get() as { count: number };
       
       res.json({
