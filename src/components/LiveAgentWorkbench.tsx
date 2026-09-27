@@ -1,41 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MemoryItem, MemoryEvent, ProvenanceAnchor } from '../types/memory';
-import { extractSemanticMemories, getGeminiApiKey } from '../lib/geminiMemory';
-import { GoogleGenAI } from '@google/genai';
+import { api } from '../lib/apiClient';
 import { 
   Bot, 
   Send, 
-  Sparkles, 
-  Layers, 
-  ShieldCheck, 
-  Terminal, 
   Cpu, 
-  RefreshCw, 
-  Brain, 
-  FileCode,
-  ArrowRight,
-  Database
+  Sparkles, 
+  Clock, 
+  Layers, 
+  ArrowRight, 
+  ShieldCheck, 
+  HelpCircle,
+  Database,
+  Brain,
+  RefreshCw
 } from 'lucide-react';
-
-interface LiveAgentWorkbenchProps {
-  memories: MemoryItem[];
-  events: MemoryEvent[];
-  onAddMemory: (mem: MemoryItem) => void;
-  onAddEvent: (evt: MemoryEvent) => void;
-  onAddAnchor: (anch: ProvenanceAnchor) => void;
-}
 
 interface ChatMessage {
   id: string;
   sender: 'user' | 'agent';
   text: string;
   timestamp: string;
-  injectedMemories?: MemoryItem[];
-  trace?: {
-    latency_ms: number;
-    tokens_used: number;
-    retrieved_count: number;
-  };
+}
+
+interface LiveAgentWorkbenchProps {
+  memories: MemoryItem[];
+  events: MemoryEvent[];
+  onAddMemory: (newMem: MemoryItem) => void;
+  onAddEvent: (newEvt: MemoryEvent) => void;
+  onAddAnchor: (newAnch: ProvenanceAnchor) => void;
 }
 
 export const LiveAgentWorkbench: React.FC<LiveAgentWorkbenchProps> = ({
@@ -55,7 +48,7 @@ export const LiveAgentWorkbench: React.FC<LiveAgentWorkbenchProps> = ({
   ]);
   const [inputText, setInputText] = useState('');
   const [isThinking, setIsThinking] = useState(false);
-  const [useHighThinking, setUseHighThinking] = useState(true);
+  const [retrievalTrace, setRetrievalTrace] = useState<any>(null);
 
   const handleSendMessage = async () => {
     const text = inputText.trim();
@@ -74,76 +67,41 @@ export const LiveAgentWorkbench: React.FC<LiveAgentWorkbenchProps> = ({
 
     const startTime = performance.now();
 
-    // 1. Ambient extraction from user input
+    // 1. Trigger live backend semantic extraction
     try {
-      const extracted = await extractSemanticMemories(text, 'chat');
-      extracted.events.forEach(e => onAddEvent(e));
-      extracted.memories.forEach(m => onAddMemory(m));
-      extracted.citations.forEach(c => onAddAnchor(c));
+      const extracted = await api.extract(text, 'chat');
+      if (extracted.memories && extracted.memories.length > 0) {
+        extracted.events.forEach(e => onAddEvent(e));
+        extracted.memories.forEach(m => onAddMemory(m));
+        extracted.citations.forEach(c => onAddAnchor(c));
+      }
     } catch (err) {
-      console.warn('Extraction error:', err);
+      console.warn('Extraction failure:', err);
     }
 
-    // 2. Retrieve relevant memory context for the agent
-    const qWords = text.toLowerCase().split(/\s+/);
-    const relevantMemories = memories
-      .filter(m => m.lifecycle_state === 'active')
-      .filter(m => {
-        const full = (m.statement + ' ' + (m.tags || []).join(' ')).toLowerCase();
-        return qWords.some(w => w.length > 2 && full.includes(w));
-      })
-      .slice(0, 4);
-
-    // 3. Generate response with Gemini or deterministic reasoning engine
-    const apiKey = getGeminiApiKey();
+    // 2. Trigger compileContext server-side to get grounded prompt and trace details
     let responseText = '';
+    try {
+      const capsule = await api.compile(text, 1500);
+      setRetrievalTrace(capsule);
 
-    if (apiKey) {
-      try {
-        const ai = new GoogleGenAI({ apiKey });
-        const systemInstruction = `You are the Nexus-Memory-Fabric AI Assistant. 
-You are grounded in the following verified Memory Context:
-${relevantMemories.map(m => `[TIER ${m.tier} - ${m.tier_name.toUpperCase()}] ${m.statement}`).join('\n')}
-
-Always cite reasons and ground answers in stored memory. If a memory was superseded, explain the transition.`;
-
-        const modelName = useHighThinking ? 'gemini-2.5-flash' : 'gemini-2.5-flash';
-
-        const result = await ai.models.generateContent({
-          model: modelName,
-          contents: text,
-          config: {
-            systemInstruction
-          }
-        });
-
-        responseText = result.text || 'I have processed your request and verified it against the memory graph.';
-      } catch (e: any) {
-        responseText = `[Memory Recalled: ${relevantMemories.length} facts]\nBased on our stored architecture memory: ${relevantMemories.map(m => m.statement).join(' ')}`;
-      }
-    } else {
-      // High-fidelity fallback response
-      if (relevantMemories.length > 0) {
+      if (capsule.current_knowledge && capsule.current_knowledge.length > 0) {
         responseText = `Based on our verified memory substrate:\n\n` +
-          relevantMemories.map(m => `• [Tier ${m.tier} ${m.tier_name.toUpperCase()}] ${m.statement}`).join('\n\n') +
+          capsule.current_knowledge.map((k: any) => `• [Tier ${k.tier}] ${k.statement}`).join('\n\n') +
           `\n\nAll decisions are grounded in immutable event records with SHA-256 provenance.`;
       } else {
-        responseText = `I observed your input and registered a new canonical event in Tier 2 Episodic storage. No previous contradictory statements were found.`;
+        responseText = `I have received your query. There are no direct matching bitemporal assertions in the active context, but I will record this interaction to episodic buffers.`;
       }
+    } catch (e) {
+      console.error('Server context compilation failed:', e);
+      responseText = 'Failed to load grounded context from persistent memory OS.';
     }
 
-    const endTime = performance.now();
     const agentMsg: ChatMessage = {
-      id: `msg-${Date.now() + 1}`,
+      id: `msg-${Date.now()}`,
       sender: 'agent',
       text: responseText,
-      timestamp: new Date().toISOString(),
-      injectedMemories: relevantMemories,
-      trace: {
-        latency_ms: parseFloat((endTime - startTime).toFixed(0)),
-        tokens_used: 180 + text.length,
-        retrieved_count: relevantMemories.length
-      }
+      timestamp: new Date().toISOString()
     };
 
     setMessages(prev => [...prev, agentMsg]);
@@ -152,160 +110,134 @@ Always cite reasons and ground answers in stored memory. If a memory was superse
 
   return (
     <div className="flex flex-col lg:flex-row h-[calc(100vh-80px)] w-full overflow-hidden bg-[#07090e]">
-      {/* Left: Interactive Chat Window */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden border-r border-slate-800 bg-grid-pattern">
-        {/* Chat Header */}
-        <div className="flex items-center justify-between px-6 py-3.5 bg-[#090d16]/90 border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="h-8 w-8 rounded-lg bg-cyan-600/20 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
-              <Bot className="h-4 w-4" />
-            </div>
-            <div>
-              <h2 className="text-xs font-bold text-white flex items-center gap-2">
-                Nexus Memory-Aware Agent
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              </h2>
-              <p className="text-[11px] text-slate-400 font-mono">Ambient Event Ingestion + Live Provenance</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 text-xs">
-            <label className="flex items-center gap-1.5 cursor-pointer text-slate-300 font-mono text-[11px]">
-              <input
-                type="checkbox"
-                checked={useHighThinking}
-                onChange={e => setUseHighThinking(e.target.checked)}
-                className="rounded border-slate-700 bg-slate-900 text-cyan-500 accent-cyan-500"
-              />
-              <span>High Thinking Mode</span>
-            </label>
-          </div>
-        </div>
-
-        {/* Message Thread */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
-            >
+      {/* Chat Container */}
+      <div className="flex-1 flex flex-col h-full bg-[#07090e] border-r border-slate-800/80 relative">
+        {/* Chat Feed */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-4 select-text">
+          {messages.map((msg) => {
+            const isAgent = msg.sender === 'agent';
+            return (
               <div
-                className={`max-w-2xl rounded-xl p-4 text-xs leading-relaxed space-y-2.5 shadow-lg ${
-                  msg.sender === 'user'
-                    ? 'bg-cyan-600 text-white rounded-br-none'
-                    : 'bg-[#090d16] border border-slate-800 text-slate-200 rounded-bl-none'
-                }`}
+                key={msg.id}
+                className={`flex gap-3 max-w-[85%] ${isAgent ? 'mr-auto' : 'ml-auto flex-row-reverse'}`}
               >
-                <div className="whitespace-pre-wrap">{msg.text}</div>
+                <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${
+                  isAgent 
+                    ? 'bg-gradient-to-br from-cyan-500 to-blue-600 text-white' 
+                    : 'bg-slate-800 text-slate-200'
+                }`}>
+                  {isAgent ? <Bot className="h-4 w-4" /> : <Layers className="h-4 w-4" />}
+                </div>
 
-                {/* Injected Memories Badge in Agent Message */}
-                {msg.injectedMemories && msg.injectedMemories.length > 0 && (
-                  <div className="pt-2 border-t border-slate-800/80 space-y-1.5 text-[11px] font-mono">
-                    <span className="text-cyan-400 font-semibold flex items-center gap-1">
-                      <ShieldCheck className="h-3 w-3" />
-                      <span>{msg.injectedMemories.length} Memories Injected & Verified</span>
-                    </span>
-                    <div className="space-y-1">
-                      {msg.injectedMemories.map(m => (
-                        <div key={m.id} className="p-1.5 rounded bg-slate-950/70 border border-slate-800 text-slate-300">
-                          [T{m.tier} {m.tier_name}] {m.title}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <div className={`p-4 rounded-xl border text-xs leading-relaxed space-y-2 ${
+                  isAgent
+                    ? 'bg-[#090d16]/90 border-slate-800 text-slate-100 shadow-md'
+                    : 'bg-slate-900/60 border-slate-800/60 text-slate-200'
+                }`}>
+                  <p className="whitespace-pre-wrap">{msg.text}</p>
+                  <span className="block text-[10px] text-slate-500 font-mono text-right">
+                    {new Date(msg.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
               </div>
-
-              {/* Timestamp & Trace */}
-              <div className="flex items-center gap-2 mt-1 text-[10px] font-mono text-slate-500 px-1">
-                <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
-                {msg.trace && (
-                  <>
-                    <span>•</span>
-                    <span className="text-emerald-400">{msg.trace.latency_ms}ms</span>
-                    <span>•</span>
-                    <span>{msg.trace.tokens_used} tokens</span>
-                  </>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
 
           {isThinking && (
-            <div className="flex items-center gap-2 text-xs font-mono text-cyan-400 p-3 bg-cyan-950/20 rounded-lg border border-cyan-900/40 w-fit">
-              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              <span>Querying memory graph & synthesizing bitemporal state...</span>
+            <div className="flex gap-3 max-w-[85%] mr-auto items-center">
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 text-white flex items-center justify-center animate-pulse">
+                <Bot className="h-4 w-4" />
+              </div>
+              <div className="flex items-center gap-1.5 p-3 rounded-xl border border-slate-800 bg-[#090d16] text-xs font-mono text-cyan-400">
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                <span>Scanning 4-tier vector/graph substrate...</span>
+              </div>
             </div>
           )}
         </div>
 
-        {/* Input Bar */}
-        <div className="p-4 bg-[#090d16] border-t border-slate-800">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSendMessage();
-            }}
-            className="flex items-center gap-2"
+        {/* Input Dock */}
+        <div className="p-4 bg-[#090d16]/80 border-t border-slate-800/80 flex items-center gap-3">
+          <input
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+            placeholder="Search, recall, or teach the memory graph..."
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+          />
+          <button
+            onClick={handleSendMessage}
+            disabled={isThinking || !inputText.trim()}
+            className="p-2.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white transition-all shadow-md shadow-cyan-600/10 cursor-pointer"
           >
-            <input
-              type="text"
-              value={inputText}
-              onChange={e => setInputText(e.target.value)}
-              placeholder="Tell the agent something, ask an architecture question, or test memory recall..."
-              className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-4 py-2.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-            />
-            <button
-              type="submit"
-              disabled={!inputText.trim() || isThinking}
-              className="px-4 py-2.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center gap-1.5 disabled:opacity-50 transition-all"
-            >
-              <Send className="h-3.5 w-3.5" />
-              <span>Send</span>
-            </button>
-          </form>
+            <Send className="h-4 w-4" />
+          </button>
         </div>
-      </main>
+      </div>
 
-      {/* Right: Real-Time Event & Memory Trace Inspector */}
-      <aside className="w-full lg:w-80 border-t lg:border-t-0 border-slate-800 bg-[#090d16] p-5 overflow-y-auto space-y-5 shrink-0">
+      {/* Retrieval Trace & Memory Telemetry Panel */}
+      <aside className="w-full lg:w-96 border-t lg:border-t-0 lg:border-l border-slate-800 bg-[#090d16] p-5 overflow-y-auto space-y-5 shrink-0 font-sans">
         <div>
           <div className="flex items-center gap-2 text-cyan-400 font-mono text-xs font-semibold uppercase mb-1">
-            <Terminal className="h-4 w-4" />
-            <span>Live Trace Monitor</span>
+            <Cpu className="h-4 w-4" />
+            <span>Retrieval Trace telemetry</span>
           </div>
-          <h3 className="text-sm font-bold text-white">Ambient Intake Stream</h3>
+          <h2 className="text-base font-bold text-white">Context Attestation Log</h2>
+          <p className="text-xs text-slate-400 mt-1">
+            Real-time multi-signal relevance scoring and Knapsack Packing calculations for active LLM context injection.
+          </p>
         </div>
 
-        {/* Live Memory Count */}
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-            <span className="text-[10px] font-mono text-slate-400">Total Memories</span>
-            <div className="font-mono text-base font-bold text-cyan-300">{memories.length}</div>
-          </div>
-          <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">
-            <span className="text-[10px] font-mono text-slate-400">Ingested Events</span>
-            <div className="font-mono text-base font-bold text-purple-300">{events.length}</div>
-          </div>
-        </div>
+        {retrievalTrace ? (
+          <div className="space-y-4">
+            {/* Packing Overview */}
+            <div className="p-4 rounded-xl border border-slate-850 bg-slate-950/60 text-xs space-y-2">
+              <div className="flex items-center justify-between text-slate-300">
+                <span className="font-semibold flex items-center gap-1.5">
+                  <Database className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>Interactive Context</span>
+                </span>
+                <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+                  {retrievalTrace.tokens_used} tok / {retrievalTrace.token_budget} max
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400">
+                Packed <strong className="text-slate-200">{retrievalTrace.trace.candidates_selected}</strong> memories out of <strong className="text-slate-200">{retrievalTrace.trace.candidates_retrieved}</strong> candidates safely.
+              </div>
+            </div>
 
-        {/* Recent Ingested Events */}
-        <div className="space-y-2">
-          <span className="text-[11px] font-mono uppercase text-slate-400">Latest Event Telemetry</span>
-          <div className="space-y-1.5">
-            {events.slice(-4).reverse().map(evt => (
-              <div key={evt.event_id} className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-xs space-y-1">
-                <div className="flex items-center justify-between font-mono text-[10px]">
-                  <span className="text-cyan-400">{evt.event_id}</span>
-                  <span className="text-slate-500 uppercase">{evt.source_type}</span>
+            {/* Trace Metrics Breakdown */}
+            <div className="space-y-2.5">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 font-mono">
+                Multi-Signal Breakdown Scores
+              </h3>
+              <div className="space-y-1.5 font-mono text-[11px] text-slate-400">
+                <div className="flex justify-between p-2 rounded bg-slate-950/40 border border-slate-900">
+                  <span>Semantic Similarity score:</span>
+                  <span className="text-cyan-400 font-bold">{retrievalTrace.trace.retriever_breakdown.semantic_cosine}</span>
                 </div>
-                <div className="text-slate-300 text-[11px] line-clamp-1">
-                  {evt.payload?.message || evt.payload?.command || evt.payload?.content || 'Sensor Event'}
+                <div className="flex justify-between p-2 rounded bg-slate-950/40 border border-slate-900">
+                  <span>BM25 Word matching:</span>
+                  <span className="text-purple-400 font-bold">{retrievalTrace.trace.retriever_breakdown.bm25_lexical}</span>
+                </div>
+                <div className="flex justify-between p-2 rounded bg-slate-950/40 border border-slate-900">
+                  <span>Entity overlap score:</span>
+                  <span className="text-emerald-400 font-bold">{retrievalTrace.trace.retriever_breakdown.entity_overlap}</span>
+                </div>
+                <div className="flex justify-between p-2 rounded bg-slate-950/40 border border-slate-900">
+                  <span>Graph neighborhood centrality:</span>
+                  <span className="text-amber-400 font-bold">{retrievalTrace.trace.retriever_breakdown.temporal_graph}</span>
                 </div>
               </div>
-            ))}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="p-5 rounded-xl border border-dashed border-slate-800 bg-[#090d16]/30 flex flex-col items-center justify-center text-center h-48 text-xs">
+            <Brain className="h-8 w-8 text-slate-700 mb-2" />
+            <p className="text-slate-500">Submit a query or chat message to generate and inspect real server-side context compile traces.</p>
+          </div>
+        )}
       </aside>
     </div>
   );

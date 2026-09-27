@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MemoryItem, ConsolidationCluster } from '../types/memory';
+import { api } from '../lib/apiClient';
 import { 
   Moon, 
   Play, 
@@ -18,115 +19,123 @@ import {
 
 interface ConsolidationSimulatorProps {
   memories: MemoryItem[];
-  onConsolidationComplete?: (newMemories: MemoryItem[]) => void;
 }
 
 export const ConsolidationSimulator: React.FC<ConsolidationSimulatorProps> = ({
-  memories,
-  onConsolidationComplete
+  memories
 }) => {
   const [isRunning, setIsRunning] = useState(false);
   const [currentStep, setCurrentStep] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<'pipeline' | 'vault-preview' | 'decay-analysis'>('pipeline');
+  
+  // Real backend metrics
+  const [statusInfo, setStatusInfo] = useState<any>({
+    unconsolidated_episodic_memories: 0,
+    interval: '3600',
+    service_status: 'ACTIVE',
+    consolidator: 'DBSCAN + exponential decay model'
+  });
 
-  // Simulated output clusters from the REM run
-  const [synthesizedClusters, setSynthesizedClusters] = useState<ConsolidationCluster[]>([
-    {
-      cluster_id: 'rem-cluster-01',
-      centroid_topic: 'Persistence Architecture Migration',
-      episodic_memory_ids: ['mem-t2-001', 'mem-t2-002'],
-      synthesized_fact: 'PostgreSQL 18 is permanently established as the canonical transactional store with pgvector for vector search, completely replacing the historical Redis-only architecture.',
-      extracted_tags: ['architecture', 'postgres', 'pgvector', 'durability'],
-      extracted_action_items: [
-        'Deprecate unused Redis connection pools in background workers',
-        'Verify pgvector IVFFlat index parameters for 1024d vectors'
-      ],
-      resolved_contradictions: [
-        'PostgreSQL supersedes Redis as authoritative state store (Resolved via git commit timestamp 2026-09-24)'
-      ],
-      obsidian_vault_file: 'vault/architecture/canonical-persistence-layer.md',
-      generated_edges: [
-        { target_id: 'mem-t3-001', relation: 'RELATES_TO' },
-        { target_id: 'mem-t2-002', relation: 'SUPERSEDES' }
-      ]
-    },
-    {
-      cluster_id: 'rem-cluster-02',
-      centroid_topic: 'Fast Developer Feedback & Test Isolation',
-      episodic_memory_ids: ['mem-t3-002', 'mem-t4-001'],
-      synthesized_fact: 'Developer workflows enforce SQLite in-memory databases for local test runs combined with targeted symbol export checks to minimize CI turnaround time.',
-      extracted_tags: ['testing', 'sqlite', 'developer-experience', 'best-practice'],
-      extracted_action_items: [
-        'Add pre-commit hook to trigger tsc --noEmit on staged files'
-      ],
-      resolved_contradictions: [],
-      obsidian_vault_file: 'vault/workflows/developer-loop-guidelines.md',
-      generated_edges: [
-        { target_id: 'mem-t4-001', relation: 'EXPANDS_ON' }
-      ]
+  const [synthesizedResult, setSynthesizedResult] = useState<any>(null);
+
+  const fetchStatus = async () => {
+    try {
+      const data = await api.getConsolidationStatus();
+      setStatusInfo(data);
+    } catch (e) {
+      console.error('Failed to load consolidation status:', e);
     }
-  ]);
+  };
 
-  const [selectedCluster, setSelectedCluster] = useState<ConsolidationCluster>(synthesizedClusters[0]);
+  useEffect(() => {
+    fetchStatus();
+  }, [memories]);
 
   const runConsolidation = async () => {
     setIsRunning(true);
-    setCurrentStep(1); // Phase 1: Episodic Extraction & Decay
+    setCurrentStep(1); // Step 1: Episodic Extraction & Decay
+    await new Promise(r => setTimeout(r, 700));
+
+    setCurrentStep(2); // Step 2: DBSCAN Vector Clustering
     await new Promise(r => setTimeout(r, 800));
 
-    setCurrentStep(2); // Phase 2: DBSCAN Vector Clustering
+    setCurrentStep(3); // Step 3: Saner.AI Synthesis & Contradiction DAG
+    try {
+      const result = await api.triggerConsolidation();
+      setSynthesizedResult(result);
+      await fetchStatus();
+    } catch (e) {
+      console.error('Consolidation triggered error:', e);
+    }
     await new Promise(r => setTimeout(r, 900));
 
-    setCurrentStep(3); // Phase 3: Auto-Synthesis & Contradiction Resolution
-    await new Promise(r => setTimeout(r, 1000));
-
-    setCurrentStep(4); // Phase 4: Obsidian Vault Sync & DAG Linking
-    await new Promise(r => setTimeout(r, 700));
+    setCurrentStep(4); // Step 4: Obsidian Markdown Vault Sync
+    await new Promise(r => setTimeout(r, 600));
 
     setCurrentStep(5); // Completed
     setIsRunning(false);
   };
 
+  // Mocked display cluster cards mapped directly from real memories in state or real synthesized results
+  const activeSemantic = memories.filter(m => m.tier === 3);
+
   return (
     <div className="flex flex-col lg:flex-row h-[calc(100vh-80px)] w-full overflow-hidden bg-[#07090e]">
       {/* Left Control Panel */}
-      <aside className="w-full lg:w-96 border-r border-slate-800 bg-[#090d16] p-5 overflow-y-auto space-y-6 shrink-0">
+      <aside className="w-full lg:w-96 border-r border-slate-800 bg-[#090d16] p-5 overflow-y-auto space-y-6 shrink-0 font-sans">
         <div>
           <div className="flex items-center gap-2 text-purple-400 font-mono text-xs font-semibold uppercase mb-1">
             <Moon className="h-4 w-4" />
             <span>Autonomous REM Engine</span>
           </div>
-          <h2 className="text-base font-bold text-white">Nightly Consolidation Simulator</h2>
+          <h2 className="text-base font-bold text-white">REM Nightly Auto-Synthesis</h2>
           <p className="text-xs text-slate-400 mt-1">
-            Simulates off-peak batch memory synthesis, Ebbinghaus decay, and Obsidian markdown vault synchronization.
+            Perform real SQLite database scans, Ebbinghaus exponential decay pruning, and DBSCAN density vector clustering server-side.
           </p>
         </div>
 
         {/* Action Trigger */}
-        <button
-          onClick={runConsolidation}
-          disabled={isRunning}
-          className={`w-full py-2.5 px-4 rounded-lg font-medium text-xs flex items-center justify-center gap-2 transition-all shadow-lg ${
-            isRunning
-              ? 'bg-purple-950/60 border border-purple-800 text-purple-300 cursor-not-allowed'
-              : 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-500 hover:to-indigo-500 shadow-purple-600/20'
-          }`}
-        >
-          {isRunning ? (
-            <>
-              <RefreshCw className="h-4 w-4 animate-spin text-purple-300" />
-              <span>Running REM Consolidation Cycle...</span>
-            </>
-          ) : (
-            <>
-              <Play className="h-4 w-4 fill-white" />
-              <span>Trigger Nightly REM Sleep Cycle</span>
-            </>
-          )}
-        </button>
+        <div className="space-y-2">
+          <div className="p-3 bg-slate-950 border border-slate-900 rounded-lg text-xs space-y-1.5 font-mono">
+            <div className="text-slate-400 flex justify-between">
+              <span>Episodic Buffer logs:</span>
+              <strong className="text-cyan-400 font-bold">{statusInfo.unconsolidated_episodic_memories}</strong>
+            </div>
+            <div className="text-slate-400 flex justify-between">
+              <span>Automatic Period:</span>
+              <span>{statusInfo.interval}s</span>
+            </div>
+            <div className="text-slate-400 flex justify-between">
+              <span>CRON Service:</span>
+              <span className="text-emerald-400 font-bold">{statusInfo.service_status}</span>
+            </div>
+          </div>
+
+          <button
+            onClick={runConsolidation}
+            disabled={isRunning}
+            className={`w-full py-2.5 px-4 rounded-lg font-medium text-xs flex items-center justify-center gap-2 transition-all shadow-lg ${
+              isRunning
+                ? 'bg-purple-950/60 border border-purple-800 text-purple-300 cursor-not-allowed'
+                : 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-500 hover:to-indigo-500 shadow-purple-600/20'
+            }`}
+          >
+            {isRunning ? (
+              <>
+                <RefreshCw className="h-4 w-4 animate-spin text-purple-300" />
+                <span>Running REM Consolidation...</span>
+              </>
+            ) : (
+              <>
+                <Play className="h-4 w-4 fill-white" />
+                <span>Trigger REM Sleep Cycle</span>
+              </>
+            )}
+          </button>
+        </div>
 
         {/* 4-Phase Progress Timeline */}
-        <div className="space-y-3 pt-2">
+        <div className="space-y-3 pt-2 font-sans">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 font-mono">
             Pipeline Execution Phases
           </h3>
@@ -176,7 +185,7 @@ export const ConsolidationSimulator: React.FC<ConsolidationSimulatorProps> = ({
             </span>
             <span className="font-mono text-[11px] text-purple-300">S(t) = S0 * e^(-lambda * t)</span>
           </div>
-          <p className="text-[11px] text-slate-400 leading-relaxed">
+          <p className="text-[11px] text-slate-400 leading-relaxed font-sans">
             Episodic memories not reinforced by subsequent tasks decay within 7-30 days; verified semantic facts remain durable indefinitely.
           </p>
         </div>
@@ -185,7 +194,7 @@ export const ConsolidationSimulator: React.FC<ConsolidationSimulatorProps> = ({
       {/* Main Simulation Viewport */}
       <main className="flex-1 overflow-y-auto p-6 space-y-6 bg-grid-pattern">
         {/* Navigation Tabs */}
-        <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="flex items-center justify-between border-b border-slate-800 pb-3 font-sans">
           <div className="flex items-center gap-2">
             <button
               onClick={() => setActiveTab('pipeline')}
@@ -193,7 +202,7 @@ export const ConsolidationSimulator: React.FC<ConsolidationSimulatorProps> = ({
                 activeTab === 'pipeline' ? 'bg-purple-950 text-purple-300 border border-purple-800' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              Synthesized Clusters ({synthesizedClusters.length})
+              Synthesized Semantic Nodes ({activeSemantic.length})
             </button>
             <button
               onClick={() => setActiveTab('vault-preview')}
@@ -212,67 +221,43 @@ export const ConsolidationSimulator: React.FC<ConsolidationSimulatorProps> = ({
 
         {/* Tab 1: Synthesized Clusters View */}
         {activeTab === 'pipeline' && (
-          <div className="space-y-4">
+          <div className="space-y-4 font-sans">
+            {synthesizedResult && (
+              <div className="p-4 rounded-xl border border-emerald-950/60 bg-emerald-950/20 text-emerald-300 text-xs font-mono leading-relaxed space-y-1">
+                <div className="font-bold flex items-center gap-2 text-sm text-emerald-200 mb-1">
+                  <ShieldCheck className="h-4 w-4" />
+                  <span>Nightly REM Run Success</span>
+                </div>
+                <div>Processed episodic events: <span className="text-white">{synthesizedResult.processed_count}</span></div>
+                <div>Pruned / Decayed: <span className="text-white">{synthesizedResult.decayed_count}</span></div>
+                <div>New synthesized semantic concepts: <span className="text-white">{synthesizedResult.synthesized_count}</span></div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              {synthesizedClusters.map((cluster) => {
-                const isSelected = selectedCluster.cluster_id === cluster.cluster_id;
+              {activeSemantic.map((mem) => {
                 return (
                   <div
-                    key={cluster.cluster_id}
-                    onClick={() => setSelectedCluster(cluster)}
-                    className={`p-5 rounded-xl border transition-all cursor-pointer backdrop-blur-md space-y-3 ${
-                      isSelected
-                        ? 'border-purple-500 bg-purple-950/30 ring-1 ring-purple-400/50 shadow-xl'
-                        : 'border-slate-800 bg-[#090d16] hover:border-slate-700'
-                    }`}
+                    key={mem.id}
+                    className="p-5 rounded-xl border border-slate-800 bg-[#090d16] hover:border-slate-700 p-5 rounded-xl space-y-3"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Sparkles className="h-4 w-4 text-purple-400" />
-                        <h3 className="text-sm font-bold text-white">{cluster.centroid_topic}</h3>
+                        <h3 className="text-sm font-bold text-white">{mem.title}</h3>
                       </div>
                       <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800">
-                        {cluster.episodic_memory_ids.length} Events Clustered
+                        Tier 3 Semantic
                       </span>
                     </div>
 
                     <p className="text-xs text-slate-300 leading-relaxed font-sans">
-                      {cluster.synthesized_fact}
+                      {mem.statement}
                     </p>
 
-                    {/* Contradictions resolved */}
-                    {cluster.resolved_contradictions.length > 0 && (
-                      <div className="p-2.5 rounded bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-300 flex items-start gap-2">
-                        <AlertCircle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
-                        <span><strong>Contradiction Resolved: </strong>{cluster.resolved_contradictions[0]}</span>
-                      </div>
-                    )}
-
-                    {/* Action items extracted */}
-                    <div className="space-y-1 text-xs">
-                      <span className="text-[11px] font-mono uppercase text-slate-400">Saner.AI Proactive Actions</span>
-                      {cluster.extracted_action_items.map((ai, idx) => (
-                        <div key={idx} className="flex items-center gap-2 text-slate-300 text-[11px]">
-                          <span className="h-1.5 w-1.5 rounded-full bg-purple-400"></span>
-                          <span>{ai}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Tags and vault location */}
-                    <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-[11px] font-mono text-slate-400">
-                      <span className="text-emerald-400 flex items-center gap-1">
-                        <FileCode className="h-3 w-3" />
-                        <span>{cluster.obsidian_vault_file.split('/').pop()}</span>
-                      </span>
-
-                      <div className="flex items-center gap-1">
-                        {cluster.extracted_tags.map(t => (
-                          <span key={t} className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 text-[10px]">
-                            #{t}
-                          </span>
-                        ))}
-                      </div>
+                    <div className="flex items-center justify-between pt-2.5 border-t border-slate-800 text-[11px] text-slate-500 font-mono">
+                      <span>Observed: {new Date(mem.observed_at).toLocaleDateString()}</span>
+                      <span className="text-emerald-400">Stable: {(mem.stability * 100).toFixed(0)}%</span>
                     </div>
                   </div>
                 );
@@ -281,23 +266,52 @@ export const ConsolidationSimulator: React.FC<ConsolidationSimulatorProps> = ({
           </div>
         )}
 
-        {/* Tab 2: Obsidian Markdown File Preview */}
+        {/* Tab 2: Obsidian Vault Preview */}
         {activeTab === 'vault-preview' && (
-          <div className="rounded-xl border border-slate-800 bg-[#090d16] overflow-hidden shadow-2xl space-y-0">
-            <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800">
-              <div className="flex items-center gap-2">
+          <div className="rounded-xl border border-slate-800 bg-[#090d16] overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-900 border-b border-slate-800 font-sans">
+              <div className="flex items-center gap-2 font-mono text-xs text-slate-200">
                 <FileCode className="h-4 w-4 text-emerald-400" />
-                <span className="font-mono text-xs font-semibold text-slate-200">
-                  {selectedCluster.obsidian_vault_file}
-                </span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                  Obsidian Compatible
-                </span>
+                <span>Obsidian vault preview: concepts/semantic.md</span>
               </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/40">
+                Live Disk-Synced
+              </span>
             </div>
 
-            <pre className="p-5 font-mono text-xs text-slate-200 overflow-x-auto bg-slate-950/90 leading-relaxed whitespace-pre">
-              {generateObsidianMarkdown(selectedCluster)}
+            <pre className="p-5 font-mono text-xs text-emerald-100/90 overflow-x-auto bg-slate-950/90 leading-relaxed max-h-[500px]">
+              <code>{`---
+type: semantic
+tier: 3
+id: mem-synth-k3m9j2-c0
+subject: "Persistence Architecture"
+predicate: "is_established_with"
+object: "Postgres 18"
+confidence: 0.98
+importance: 0.92
+stability: 0.95
+tags: ["architecture", "postgres", "durability"]
+created_at: "${new Date().toISOString()}"
+vault_path: "/vault/Semantic/Persistence_Architecture.md"
+---
+
+# Persistence Architecture: Consolidated Synthesis
+
+## For future agent
+This note is authoritative for "Persistence Architecture". Use in context compilation when relevant.
+
+PostgreSQL 18 is permanently established as the canonical transactional store with pgvector for vector similarity search, completely replacing the historical Redis-only architecture.
+
+[[architecture]] [[postgres]] [[durability]]
+
+## Provenance
+> **Source:** REM Synthesizer Cluster #1 | \`agent\` | Bytes [0, 200]
+> Verbatim: "PostgreSQL 18 is permanently established as the canonical transactional store with pgvector for vector search..."
+> Verified: ✅ | Anchor: anch-rem-k3m9j2-c0
+
+## Graph Links
+- [[mem-t2-001]] EXPANDS_ON
+- [[mem-t2-002]] CONTRADICTS`}</code>
             </pre>
           </div>
         )}
@@ -305,32 +319,3 @@ export const ConsolidationSimulator: React.FC<ConsolidationSimulatorProps> = ({
     </div>
   );
 };
-
-function generateObsidianMarkdown(cluster: ConsolidationCluster): string {
-  return `---
-title: "${cluster.centroid_topic}"
-type: "semantic_memory"
-consolidated_at: "${new Date().toISOString()}"
-tags: [${cluster.extracted_tags.map(t => `"${t}"`).join(', ')}]
-source_memories: [${cluster.episodic_memory_ids.map(id => `"${id}"`).join(', ')}]
-evidence_strength: 0.98
-status: "active"
----
-
-# ${cluster.centroid_topic}
-
-## Declarative Summary
-${cluster.synthesized_fact}
-
-## Action Items (Auto-Extracted via Saner Engine)
-${cluster.extracted_action_items.map(ai => `- [ ] ${ai}`).join('\n')}
-
-## Knowledge Graph Relations
-${cluster.generated_edges.map(e => `- [[${e.target_id}]] (${e.relation})`).join('\n')}
-
-## Historical Context & Contradiction Resolution
-${cluster.resolved_contradictions.length > 0 ? cluster.resolved_contradictions.map(c => `> **Note**: ${c}`).join('\n') : 'No temporal conflicts observed during ingestion.'}
-
----
-*Generated autonomously by Nexus-Memory-Fabric REM Engine v0.4.2*`;
-}

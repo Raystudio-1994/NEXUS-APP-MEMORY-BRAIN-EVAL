@@ -23,7 +23,8 @@ export type ActiveTab =
   | 'provenance' 
   | 'api-sandbox' 
   | 'benchmarks' 
-  | 'agent-workbench';
+  | 'agent-workbench'
+  | 'audit';
 
 interface NavbarProps {
   activeTab: ActiveTab;
@@ -47,7 +48,9 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'api-sandbox', label: 'API & gRPC Sandbox', icon: Terminal, badge: 'REST/MCP' },
     { id: 'benchmarks', label: 'Competitive Matrix', icon: BarChart3, badge: 'LoCoMo' },
     { id: 'agent-workbench', label: 'Agent Playground', icon: Bot, badge: 'AI Live' },
+    { id: 'audit', label: 'Audit Dashboard', icon: CheckCircle2, badge: 'Persisted' },
   ];
+
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-cyan-950/60 bg-[#07090e]/90 backdrop-blur-md">
