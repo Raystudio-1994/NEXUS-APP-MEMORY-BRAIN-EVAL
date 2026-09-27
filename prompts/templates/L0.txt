@@ -1,0 +1,6 @@
+[COMPACT SYSTEM CONTEXT]
+Query: {{query}}
+Knowledge:
+{{#current_knowledge}}* {{statement}} ({{tier_name}}){{/current_knowledge}}
+Procedures:
+{{#relevant_procedures}}* {{instruction}}{{/relevant_procedures}}

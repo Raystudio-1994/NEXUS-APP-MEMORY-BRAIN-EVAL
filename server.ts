@@ -8,6 +8,14 @@ import memoryRoutes from './server/routes/memory';
 import { extractSemanticMemories, compileContext, verifyProvenance } from './server/memoryService';
 import { rem_nightly_consolidation_pipeline } from './server/consolidation';
 import { startRemCron } from './server/cron/remCron';
+import { runEvalHarness, getLatestEvalRun, getEvalHistory } from './server/eval/harness';
+import { initEvalTables } from './server/eval/store';
+import { apexOptimize, getApexWeights, getApexLineage } from './server/apex/optimizer';
+import { getPromptRegistry, createVersion, setActive, autoRevert } from './server/prompts/registry';
+import { startPromptChasingCron } from './server/cron/promptChasingCron';
+import { handleMcpHttpRequest } from './server/mcp/server';
+import { nexusTools } from './server/mcp/tools';
+import cron from 'node-cron';
 
 dotenv.config();
 
@@ -113,6 +121,134 @@ async function startServer() {
       });
     } catch (err: any) {
       res.status(500).json({ error: 'Consolidation status query failed', details: err.message });
+    }
+  });
+
+  // Initialize evaluation tables
+  initEvalTables();
+
+  // POST /api/eval/run - Execute evaluation harness
+  app.post('/api/eval/run', async (req, res) => {
+    try {
+      const { weights, promptVersion } = req.body || {};
+      const result = await runEvalHarness(weights, promptVersion);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Eval harness execution failed', details: err.message });
+    }
+  });
+
+  // GET /api/eval/latest - Fetch most recent evaluation run
+  app.get('/api/eval/latest', (req, res) => {
+    try {
+      const latest = getLatestEvalRun();
+      if (!latest) {
+        return res.status(404).json({ error: 'No eval runs recorded yet.' });
+      }
+      res.json(latest);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch latest eval run', details: err.message });
+    }
+  });
+
+  // GET /api/eval/history - Fetch evaluation run history
+  app.get('/api/eval/history', (req, res) => {
+    try {
+      const history = getEvalHistory(50);
+      res.json(history);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch eval history', details: err.message });
+    }
+  });
+
+  // POST /api/apex/optimize - Trigger APEX hill climbing optimization
+  app.post('/api/apex/optimize', async (req, res) => {
+    try {
+      const budget = req.body?.budget || 5000;
+      const result = await apexOptimize(budget);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: 'APEX optimization failed', details: err.message });
+    }
+  });
+
+  // GET /api/apex/weights - Fetch active weights and lineage history
+  app.get('/api/apex/weights', (req, res) => {
+    try {
+      const weights = getApexWeights();
+      const lineage = getApexLineage();
+      res.json({ weights, lineage });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch APEX weights', details: err.message });
+    }
+  });
+
+  // GET /api/prompts/registry - Fetch full prompt registry and active version
+  app.get('/api/prompts/registry', (req, res) => {
+    try {
+      const registry = getPromptRegistry();
+      res.json(registry);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to fetch prompt registry', details: err.message });
+    }
+  });
+
+  // POST /api/prompts/publish - Create and publish a new prompt version
+  app.post('/api/prompts/publish', (req, res) => {
+    try {
+      const { templates, weights, evalScore, author } = req.body || {};
+      const newVersion = createVersion(templates || {}, weights, evalScore, author);
+      res.json(newVersion);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to publish prompt version', details: err.message });
+    }
+  });
+
+  // POST /api/prompts/revert - Trigger prompt auto-revert to best prior version
+  app.post('/api/prompts/revert', (req, res) => {
+    try {
+      const result = autoRevert();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to revert prompt version', details: err.message });
+    }
+  });
+
+  // POST /mcp - Model Context Protocol Streamable HTTP JSON-RPC 2.0 endpoint
+  app.post('/mcp', async (req, res) => {
+    await handleMcpHttpRequest(req, res);
+  });
+
+  // GET /.well-known/mcp - Standard MCP endpoint discovery
+  app.get('/.well-known/mcp', (req, res) => {
+    res.json({
+      mcp_endpoint: '/mcp',
+      transport: 'streamable-http-jsonrpc-2.0',
+      server: 'nexus-memory-fabric',
+      version: '0.4.2',
+      tools_count: nexusTools.length
+    });
+  });
+
+  // GET /api/mcp/tools - Exposes tool schemas for sandbox UI
+  app.get('/api/mcp/tools', (req, res) => {
+    res.json(nexusTools.map(t => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema
+    })));
+  });
+
+  // Start prompt chasing regression background monitoring
+  startPromptChasingCron();
+
+  // Schedule nightly eval cron at 0 2 * * * (2:00 AM)
+  cron.schedule('0 2 * * *', async () => {
+    try {
+      console.log('Running nightly evaluation harness at 2:00 AM...');
+      await runEvalHarness();
+    } catch (err) {
+      console.error('Nightly evaluation run error:', err);
     }
   });
 

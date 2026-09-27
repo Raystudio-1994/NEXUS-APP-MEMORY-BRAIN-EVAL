@@ -133,6 +133,8 @@ export interface CompiledContextCapsule {
   active_decisions: Array<{ id: string; decision: string; confidence: number }>;
   current_knowledge: Array<{ id: string; statement: string; tier: MemoryTier; score: number }>;
   relevant_procedures: Array<{ id: string; instruction: string }>;
+  working_context?: Array<{ id: string; statement: string }>;
+  selected_ids?: string[];
   evidence_citations: ProvenanceAnchor[];
   conflicts_detected: Array<{ claim_a: string; claim_b: string; resolution: string }>;
   trace: {

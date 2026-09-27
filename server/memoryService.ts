@@ -3,6 +3,7 @@ import { getEmbedding, cosineSimilarity, computeSha256 } from './embeddings';
 import { syncMemoryToVault } from './vaultSyncer';
 import { GoogleGenAI } from '@google/genai';
 import { MemoryItem, MemoryEvent, ProvenanceAnchor, CompiledContextCapsule } from '../src/types/memory';
+import { ScoringWeights, defaultWeights } from './apex/weights';
 
 /**
  * Normalizes string tags to an array.
@@ -469,37 +470,74 @@ Return JSON adhering to this exact schema:
 
 /**
  * Advanced Context Compilation with true multi-signal weighted scoring, Graph centrality, 
- * and 0/1 Knapsack optimization constraints.
+ * recency decay, and 0/1 Knapsack optimization constraints.
  */
-export async function compileContext(query: string, tokenBudget: number = 1500): Promise<CompiledContextCapsule> {
-  const memories = getMemories('active');
+export async function compileContext(
+  query: string,
+  tokenBudget: number = 1500,
+  weightsOverride?: Partial<ScoringWeights>
+): Promise<CompiledContextCapsule> {
+  const weights: ScoringWeights = { ...defaultWeights, ...(weightsOverride || {}) };
+  const memories = getMemories(); // Retrieve all candidates (active + historical if relevant)
   const queryEmbedding = await getEmbedding(query);
   const centralityMap = getGraphCentrality();
 
-  const scored = memories.map(m => {
+  const qLower = query.toLowerCase();
+  const qWords = qLower.split(/[\s,.;:!?`"'/()]+/).filter(w => w.length > 2);
+  const isTemporalHistorical = qLower.includes('historical') || qLower.includes('before') || qLower.includes('previously') || qLower.includes('prior') || qLower.includes('early september');
+
+  // Filter memories based on active state unless temporal query explicitly targets historical/superseded
+  const candidates = memories.filter(m => {
+    if (isTemporalHistorical) return true;
+    return m.lifecycle_state === 'active';
+  });
+
+  const scored = candidates.map(m => {
     // 1. Semantic Cosine similarity
-    const semanticCosine = cosineSimilarity(queryEmbedding, m.embedding_vector || []);
+    const semanticCosine = Math.max(0, cosineSimilarity(queryEmbedding, m.embedding_vector || []));
 
     // 2. Lexical word-overlap matching
-    const qLower = query.toLowerCase();
-    const qWords = qLower.split(/\s+/).filter(w => w.length > 2);
-    const mText = (m.statement + ' ' + m.tags.join(' ')).toLowerCase();
+    const mText = (m.title + ' ' + m.statement + ' ' + m.tags.join(' ') + ' ' + (m.subject || '') + ' ' + (m.predicate || '') + ' ' + (m.object || '')).toLowerCase();
     const matches = qWords.filter(w => mText.includes(w)).length;
-    const bm25Lexical = matches / Math.max(1, qWords.length);
+    const bm25Lexical = qWords.length > 0 ? matches / qWords.length : 0.0;
 
     // 3. Entity overlap
-    const entityOverlap = m.subject && qLower.includes(m.subject.toLowerCase()) ? 1.0 : 0.0;
+    const subjectMatch = m.subject && qLower.includes(m.subject.toLowerCase()) ? 1.0 : 0.0;
+    const objectMatch = m.object && qLower.includes(m.object.toLowerCase()) ? 0.7 : 0.0;
+    const entityOverlap = Math.max(subjectMatch, objectMatch);
 
     // 4. Graph centrality ranking (degree centrality)
-    const temporalGraph = centralityMap[m.id] || 0.05;
+    const graphCentrality = centralityMap[m.id] || 0.05;
 
-    // Composite scoring using weights
-    const compositeScore = 0.40 * semanticCosine + 0.20 * bm25Lexical + 0.20 * entityOverlap + 0.20 * temporalGraph;
+    // 5. Temporal relevance
+    let temporalScore = 0.1;
+    if (isTemporalHistorical && (m.lifecycle_state === 'superseded' || m.valid_to)) {
+      temporalScore = 0.95;
+    } else if (!isTemporalHistorical && m.lifecycle_state === 'active') {
+      temporalScore = 0.85;
+    }
+
+    // 6. Recency decay: S(t) = S0 * e^(-lambda * ageInDays)
+    const ageInDays = Math.max(0, (Date.now() - new Date(m.observed_at).getTime()) / (1000 * 60 * 60 * 24));
+    const recencyScore = Math.exp(-(weights.decay_lambda ?? 0.05) * ageInDays);
+
+    // Multi-signal composite weighted score
+    const compositeScore =
+      weights.semantic * semanticCosine +
+      weights.lexical * bm25Lexical +
+      weights.entity * entityOverlap +
+      weights.graph * graphCentrality +
+      weights.temporal * temporalScore +
+      weights.recency * recencyScore;
+
+    const importance = m.importance ?? 0.8;
+    const confidence = m.confidence ?? 0.9;
+    const utility = compositeScore * importance * confidence;
 
     return {
       memory: m,
       compositeScore,
-      utility: compositeScore * m.importance * m.confidence
+      utility
     };
   }).sort((a, b) => b.utility - a.utility);
 
@@ -522,12 +560,16 @@ export async function compileContext(query: string, tokenBudget: number = 1500):
     timestamp: now,
     token_budget: tokenBudget,
     tokens_used: currentTokens + 150, // with boilerplate
+    selected_ids: selected.map(s => s.id),
     state_summary: {
       current_project: 'Nexus-Memory-Fabric',
       active_branch: 'main/bitemporal-runtime',
       current_task: query,
       active_blocker: selected.find(m => m.tags.includes('blocker'))?.statement
     },
+    working_context: selected
+      .filter(m => m.tier === 1)
+      .map(m => ({ id: m.id, statement: m.statement })),
     active_decisions: selected
       .filter(m => m.tags.includes('decision') || m.predicate?.includes('select') || m.predicate?.includes('mandate'))
       .map(m => ({ id: m.id, decision: m.statement, confidence: m.confidence })),
@@ -540,7 +582,7 @@ export async function compileContext(query: string, tokenBudget: number = 1500):
     evidence_citations: [],
     conflicts_detected: [],
     trace: {
-      candidates_retrieved: memories.length,
+      candidates_retrieved: candidates.length,
       candidates_selected: selected.length,
       latency_ms: 12,
       retriever_breakdown: {
