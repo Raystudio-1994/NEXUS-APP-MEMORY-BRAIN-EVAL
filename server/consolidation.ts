@@ -155,7 +155,7 @@ Format your response as a valid JSON with "statement", "subject", "predicate", "
 }`;
 
         const synthRes = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.8-flash',
           contents: synthPrompt,
           config: { responseMimeType: 'application/json', temperature: 0.1 }
         });

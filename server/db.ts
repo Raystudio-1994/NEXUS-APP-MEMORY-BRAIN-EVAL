@@ -10,12 +10,23 @@ if (!fs.existsSync(DB_DIR)) {
 }
 
 const DB_PATH = path.join(DB_DIR, 'nexus.db');
-export const db = new DatabaseSync(DB_PATH);
 
-// Turn on foreign keys
-db.exec('PRAGMA foreign_keys = ON;');
+let _db: DatabaseSync | null = null;
+
+export function getDb(): DatabaseSync {
+  if (_db) return _db;
+  _db = new DatabaseSync(DB_PATH);
+  _db.exec('PRAGMA foreign_keys = ON;');
+  _db.exec('PRAGMA journal_mode = WAL;');
+  _db.exec('PRAGMA busy_timeout = 5000;');
+  _db.exec('PRAGMA synchronous = NORMAL;');
+  return _db;
+}
+
+export const db = getDb();
 
 export function initDb() {
+  const db = getDb();
   // Create tables with source_event_ids TEXT column
   db.exec(`
     CREATE TABLE IF NOT EXISTS memory_events (
@@ -82,10 +93,42 @@ export function initDb() {
       verified INTEGER NOT NULL DEFAULT 1
     );
 
+    CREATE TABLE IF NOT EXISTS eval_runs (
+      run_id TEXT PRIMARY KEY,
+      timestamp TEXT NOT NULL,
+      prompt_version TEXT,
+      weights_json TEXT,
+      total_queries INTEGER NOT NULL,
+      avg_recall_at_k REAL NOT NULL,
+      avg_token_density REAL NOT NULL,
+      avg_mrr REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS eval_results (
+      run_id TEXT NOT NULL,
+      query_id TEXT NOT NULL,
+      recall_at_5 REAL NOT NULL,
+      recall_at_10 REAL NOT NULL,
+      mrr REAL NOT NULL,
+      token_density REAL NOT NULL,
+      retrieved_ids TEXT NOT NULL,
+      expected_ids TEXT NOT NULL,
+      latency_ms INTEGER NOT NULL,
+      PRIMARY KEY (run_id, query_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_memories_tier ON memories(tier);
     CREATE INDEX IF NOT EXISTS idx_memories_lifecycle ON memories(lifecycle_state);
     CREATE INDEX IF NOT EXISTS idx_memories_valid ON memories(valid_from, valid_to);
   `);
+
+  // Initialize vector table
+  try {
+    const { initVecTable } = require('./vectorStore');
+    initVecTable();
+  } catch (err) {
+    console.warn('Vector table initialization notice:', err);
+  }
 
   // Seed with initial states if empty
   const countStmt = db.prepare('SELECT COUNT(*) as count FROM memories');

@@ -4,6 +4,8 @@ import { syncMemoryToVault } from './vaultSyncer';
 import { GoogleGenAI } from '@google/genai';
 import { MemoryItem, MemoryEvent, ProvenanceAnchor, CompiledContextCapsule } from '../src/types/memory';
 import { ScoringWeights, defaultWeights } from './apex/weights';
+import { upsertVector, knnSearch } from './vectorStore';
+import { kuzuUpsertMemory, kuzuCreateEdge } from './graphStore';
 
 /**
  * Normalizes string tags to an array.
@@ -183,7 +185,7 @@ Return JSON adhering to this exact schema:
 }`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
@@ -344,6 +346,13 @@ Return JSON adhering to this exact schema:
         anchor.verified ? 1 : 0
       ]);
 
+      // Sync vector embedding to vector store
+      if (mem.embedding_vector) {
+        upsertVector(mem.id, mem.embedding_vector);
+      }
+      // Sync memory to Kuzu embedded graph
+      await kuzuUpsertMemory(mem);
+
       // Create graph links with related previous memories
       const existingMemories = getMemories('active');
       const insertLink = db.prepare(`
@@ -358,12 +367,14 @@ Return JSON adhering to this exact schema:
         if (similarity > 0.85) {
           const edgeId = `edge-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
           insertLink.run(edgeId, mem.id, ex.id, 'RELATES_TO', parseFloat(similarity.toFixed(3)), now);
+          await kuzuCreateEdge(mem.id, ex.id, 'RELATES_TO', similarity);
           
           if (mem.subject && ex.subject && mem.subject.toLowerCase() === ex.subject.toLowerCase()) {
             if (mem.predicate && ex.predicate && mem.predicate.toLowerCase() === ex.predicate.toLowerCase() && mem.object !== ex.object) {
               // Potential contradiction / supersedence
               const superEdgeId = `edge-sup-${Date.now().toString(36)}`;
               insertLink.run(superEdgeId, mem.id, ex.id, 'SUPERSEDES', 0.95, now);
+              await kuzuCreateEdge(mem.id, ex.id, 'SUPERSEDES', 0.95);
               
               // Set superseded state on old memory
               const updateOld = db.prepare('UPDATE memories SET lifecycle_state = "superseded", valid_to = ? WHERE id = ?');
@@ -451,10 +462,16 @@ Return JSON adhering to this exact schema:
         mem.source_event_ids.join(',')
       ]);
 
+      if (mem.embedding_vector) {
+        upsertVector(mem.id, mem.embedding_vector);
+      }
+      await kuzuUpsertMemory(mem);
+
       // Create fallback link
       const edgeId = `edge-${Date.now().toString(36)}-p${j}`;
       const insertLink = db.prepare('INSERT INTO memory_links (id, source, target, relation_type, weight, valid_from) VALUES (?, ?, ?, ?, ?, ?)');
       insertLink.run(edgeId, mem.id, 'mem-t4-001', 'RELATES_TO', 0.70, now);
+      await kuzuCreateEdge(mem.id, 'mem-t4-001', 'RELATES_TO', 0.70);
 
       await syncMemoryToVault(mem, []);
       newMemories.push(mem);
@@ -480,6 +497,7 @@ export async function compileContext(
   const weights: ScoringWeights = { ...defaultWeights, ...(weightsOverride || {}) };
   const memories = getMemories(); // Retrieve all candidates (active + historical if relevant)
   const queryEmbedding = await getEmbedding(query);
+  const knnHits = knnSearch(queryEmbedding, 25);
   const centralityMap = getGraphCentrality();
 
   const qLower = query.toLowerCase();

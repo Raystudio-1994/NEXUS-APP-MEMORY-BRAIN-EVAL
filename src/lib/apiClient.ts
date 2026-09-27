@@ -1,4 +1,4 @@
-import { MemoryItem, MemoryEvent, GraphEdge, ProvenanceAnchor, CompiledContextCapsule } from '../types/memory';
+import { MemoryItem, MemoryEvent, GraphEdge, ProvenanceAnchor, CompiledContextCapsule, ContextScoringWeights } from '../types/memory';
 
 /**
  * Production-grade API Client interfacing the React frontend with the
@@ -101,11 +101,11 @@ export const api = {
   /**
    * Submits prompt budget and calculates true cosine similarity scores + knapsack context packing.
    */
-  async compile(query: string, tokenBudget: number = 1500): Promise<CompiledContextCapsule> {
+  async compile(query: string, tokenBudget: number = 1500, weights?: Partial<ContextScoringWeights>): Promise<CompiledContextCapsule> {
     const response = await fetch('/api/compile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, tokenBudget })
+      body: JSON.stringify({ query, tokenBudget, weights })
     });
     if (!response.ok) throw new Error('Context compilation failed on server.');
     return response.json();

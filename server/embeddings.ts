@@ -62,7 +62,7 @@ export async function getEmbedding(text: string): Promise<number[]> {
   try {
     const ai = new GoogleGenAI({ apiKey });
     const response = await ai.models.embedContent({
-      model: 'text-embedding-004',
+      model: 'gemini-embedding-2-preview',
       contents: text
     }) as any;
 

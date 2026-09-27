@@ -15,6 +15,7 @@ import { getPromptRegistry, createVersion, setActive, autoRevert } from './serve
 import { startPromptChasingCron } from './server/cron/promptChasingCron';
 import { handleMcpHttpRequest } from './server/mcp/server';
 import { nexusTools } from './server/mcp/tools';
+import { initKuzu } from './server/graphStore';
 import cron from 'node-cron';
 
 dotenv.config();
@@ -22,6 +23,7 @@ dotenv.config();
 async function startServer() {
   // Initialize Database Sync
   const sqliteDb = initDb();
+  await initKuzu();
   
   const app = express();
 
@@ -59,12 +61,12 @@ async function startServer() {
   // Compile endpoint
   app.post('/api/compile', async (req, res) => {
     try {
-      const { query, tokenBudget } = req.body;
+      const { query, tokenBudget, weights } = req.body;
       if (!query) {
         return res.status(400).json({ error: 'Query is required for context compilation.' });
       }
       const budget = tokenBudget ? parseInt(tokenBudget, 10) : 1500;
-      const capsule = await compileContext(query, budget);
+      const capsule = await compileContext(query, budget, weights);
       res.json(capsule);
     } catch (err: any) {
       res.status(500).json({ error: 'Compilation failed', details: err.message });
@@ -274,9 +276,16 @@ async function startServer() {
     console.log('Unified production mode: serving prebuilt dist files.');
   }
 
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
+  const PORT = parseInt(process.env.PORT || '3000', 10);
+  const server = app.listen(PORT, () => {
     console.log(`Nexus Unified APEX Memory OS listening on port ${PORT}`);
+  });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} in use, killing...`);
+      process.exit(1);
+    }
   });
 }
 

@@ -1,4 +1,4 @@
-import { db } from '../db';
+import { getDb, db } from '../db';
 
 export interface EvalRunRecord {
   run_id: string;

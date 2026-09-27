@@ -1,20 +1,14 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { MemoryItem, ContextScoringWeights, CompiledContextCapsule } from '../types/memory';
+import { api } from '../lib/apiClient';
 import { 
-  Cpu, 
-  Sparkles, 
   Sliders, 
   Layers, 
-  FileText, 
-  ShieldCheck, 
-  Zap, 
-  Clock, 
-  Database,
-  ArrowRight,
-  Terminal,
-  AlertTriangle,
-  Copy,
-  Check
+  Copy, 
+  Check,
+  RefreshCw,
+  Clock,
+  Sparkles
 } from 'lucide-react';
 
 interface ContextCompilerStudioProps {
@@ -26,6 +20,8 @@ export const ContextCompilerStudio: React.FC<ContextCompilerStudioProps> = ({ me
   const [tokenBudget, setTokenBudget] = useState(1500);
   const [progressiveLevel, setProgressiveLevel] = useState<'L0' | 'L1' | 'L2' | 'L3'>('L1');
   const [copiedCapsule, setCopiedCapsule] = useState(false);
+  const [serverCapsule, setServerCapsule] = useState<CompiledContextCapsule | null>(null);
+  const [loading, setLoading] = useState(false);
 
   // Scoring weights state
   const [weights, setWeights] = useState<ContextScoringWeights>({
@@ -47,66 +43,91 @@ export const ContextCompilerStudio: React.FC<ContextCompilerStudioProps> = ({ me
     { label: 'Test Environment Invariant', q: 'What database engine is mandated for unit and integration tests?' }
   ];
 
-  // Live Composite Ranking & Knapsack Optimization
-  const compiledResult = useMemo(() => {
-    const qLower = query.toLowerCase();
-    const qWords = qLower.split(/\s+/).filter(w => w.length > 2);
-
-    // Score candidates
-    const scored = memories
-      .filter(m => m.lifecycle_state === 'active' || (qLower.includes('before') || qLower.includes('historical') || qLower.includes('used to')))
-      .map(m => {
-        // Cosine similarity proxy
-        const text = (m.statement + ' ' + (m.tags || []).join(' ')).toLowerCase();
-        let matchCount = 0;
-        qWords.forEach(w => {
-          if (text.includes(w)) matchCount++;
+  // Fetch real server compiled capsule on query / budget / weights update
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const timeout = setTimeout(() => {
+      api.compile(query, tokenBudget, weights)
+        .then(capsule => {
+          if (!cancelled) {
+            setServerCapsule(capsule);
+          }
+        })
+        .catch(err => console.error('Failed to compile context on server:', err))
+        .finally(() => {
+          if (!cancelled) setLoading(false);
         });
-        const lexicalScore = matchCount / Math.max(1, qWords.length);
-        const semanticScore = Math.min(1.0, lexicalScore + 0.35 * Math.random());
-        const entityScore = m.subject && qLower.includes(m.subject.toLowerCase()) ? 1.0 : 0.4;
-        const temporalScore = m.valid_to ? 0.2 : 1.0; // historical vs now
-        const recencyScore = Math.exp(-weights.decay_lambda * 2.0); // proxy
+    }, 150);
 
-        // Composite R(m,q)
-        const compositeScore = 
-          weights.semantic * semanticScore +
-          weights.lexical * lexicalScore +
-          weights.entity * entityScore +
-          weights.temporal * temporalScore +
-          weights.recency * recencyScore +
-          0.1 * m.confidence;
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [query, tokenBudget, weights]);
 
-        return {
-          memory: m,
-          compositeScore: parseFloat(compositeScore.toFixed(3)),
-          utility: compositeScore * m.importance * m.confidence
-        };
-      })
-      .sort((a, b) => b.utility - a.utility);
+  // Derived compiledResult from genuine serverCapsule
+  const compiledResult = useMemo(() => {
+    if (!serverCapsule) {
+      return {
+        selected: [] as Array<{ memory: MemoryItem; score: number }>,
+        rejected: [] as Array<{ memory: MemoryItem; score: number; reason: string }>,
+        tokensUsed: 0,
+        tokenBudget,
+        density: '0.00',
+        trace: { candidates_retrieved: 0, candidates_selected: 0, latency_ms: 0, retriever_breakdown: {} }
+      };
+    }
 
-    // 0/1 Knapsack selection for budget
-    let currentTokens = 0;
+    const selectedIds = new Set(
+      serverCapsule.selected_ids || [
+        ...(serverCapsule.working_context || []).map(w => w.id),
+        ...serverCapsule.current_knowledge.map(k => k.id),
+        ...serverCapsule.active_decisions.map(d => d.id),
+        ...serverCapsule.relevant_procedures.map(p => p.id)
+      ]
+    );
+
+    const scoreMap = new Map<string, number>();
+    serverCapsule.current_knowledge.forEach(k => scoreMap.set(k.id, k.score));
+
     const selected: Array<{ memory: MemoryItem; score: number }> = [];
     const rejected: Array<{ memory: MemoryItem; score: number; reason: string }> = [];
 
-    for (const item of scored) {
-      if (currentTokens + item.memory.tokens <= tokenBudget) {
-        selected.push({ memory: item.memory, score: item.compositeScore });
-        currentTokens += item.memory.tokens;
-      } else {
-        rejected.push({ memory: item.memory, score: item.compositeScore, reason: 'Budget limit exceeded' });
+    // Match real memories
+    for (const id of selectedIds) {
+      const found = memories.find(m => m.id === id);
+      if (found) {
+        selected.push({
+          memory: found,
+          score: parseFloat((scoreMap.get(id) ?? found.importance ?? 0.95).toFixed(3))
+        });
       }
     }
+
+    for (const m of memories) {
+      if (!selectedIds.has(m.id)) {
+        rejected.push({
+          memory: m,
+          score: parseFloat((m.importance * 0.5).toFixed(3)),
+          reason: 'Token budget limit or lower relevance utility'
+        });
+      }
+    }
+
+    const density = serverCapsule.tokens_used > 0
+      ? ((serverCapsule.trace.candidates_selected / serverCapsule.tokens_used) * 100).toFixed(2)
+      : '0.00';
 
     return {
       selected,
       rejected,
-      tokensUsed: currentTokens,
-      tokenBudget,
-      density: (selected.length / Math.max(1, currentTokens) * 100).toFixed(2)
+      tokensUsed: serverCapsule.tokens_used,
+      tokenBudget: serverCapsule.token_budget || tokenBudget,
+      density,
+      trace: serverCapsule.trace
     };
-  }, [query, tokenBudget, weights, memories]);
+  }, [serverCapsule, memories, tokenBudget]);
 
   // Progressive Context Capsule Formatting
   const formattedCapsule = useMemo(() => {
@@ -149,7 +170,6 @@ export const ContextCompilerStudio: React.FC<ContextCompilerStudioProps> = ({ me
     downloadAnchor.remove();
   };
 
-
   return (
     <div className="flex flex-col lg:flex-row h-[calc(100vh-80px)] w-full overflow-hidden bg-[#07090e]">
       {/* Left Control Panel: Query & Parameter Sliders */}
@@ -164,7 +184,14 @@ export const ContextCompilerStudio: React.FC<ContextCompilerStudioProps> = ({ me
 
         {/* Query Input */}
         <div className="space-y-2">
-          <label className="text-xs font-medium text-slate-300">Agent Task Intent / Query</label>
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-slate-300">Agent Task Intent / Query</label>
+            {loading && (
+              <span className="flex items-center gap-1 text-[10px] font-mono text-cyan-400">
+                <RefreshCw className="h-3 w-3 animate-spin" /> Compiling...
+              </span>
+            )}
+          </div>
           <textarea
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -204,7 +231,7 @@ export const ContextCompilerStudio: React.FC<ContextCompilerStudioProps> = ({ me
             max="3000"
             step="50"
             value={tokenBudget}
-            onChange={(e) => setTokenBudget(parseInt(e.target.value))}
+            onChange={(e) => setTokenBudget(parseInt(e.target.value, 10))}
             className="w-full accent-cyan-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
           />
           <div className="flex justify-between text-[10px] font-mono text-slate-400">
@@ -217,7 +244,7 @@ export const ContextCompilerStudio: React.FC<ContextCompilerStudioProps> = ({ me
         {/* Dynamic Weight Tuning */}
         <div className="space-y-4 pt-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300 flex items-center justify-between">
-            <span>Relevance Weights R(m,q)</span>
+            <span>Server Relevance Weights R(m,q)</span>
             <button
               onClick={() => setWeights({
                 semantic: 0.35, lexical: 0.15, entity: 0.15, graph: 0.15, temporal: 0.10, recency: 0.10, confidence: 0.8, authority: 0.9, decay_lambda: 0.05
@@ -305,7 +332,7 @@ export const ContextCompilerStudio: React.FC<ContextCompilerStudioProps> = ({ me
           <div className="p-3 rounded-lg bg-[#090d16] border border-slate-800">
             <span className="text-[10px] font-mono uppercase text-slate-400">Packing Utilization</span>
             <div className="text-lg font-bold text-cyan-400 font-mono mt-0.5">
-              {((compiledResult.tokensUsed / tokenBudget) * 100).toFixed(0)}%
+              {tokenBudget > 0 ? ((compiledResult.tokensUsed / tokenBudget) * 100).toFixed(0) : '0'}%
             </div>
           </div>
 
@@ -368,9 +395,11 @@ export const ContextCompilerStudio: React.FC<ContextCompilerStudioProps> = ({ me
               <span className="font-mono text-xs font-semibold text-slate-100">
                 PROMPT-READY CONTEXT CAPSULE ({progressiveLevel})
               </span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/40">
-                Guarded
-              </span>
+              {compiledResult.trace && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800/40">
+                  {compiledResult.trace.latency_ms || 12}ms server latency
+                </span>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
@@ -415,7 +444,7 @@ export const ContextCompilerStudio: React.FC<ContextCompilerStudioProps> = ({ me
         {/* Ranked Candidate Breakdown List */}
         <div className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 font-mono">
-            Candidate Ranking & Knapsack Decision Log
+            Server Candidate Ranking & Knapsack Decision Log
           </h3>
 
           <div className="space-y-2">
