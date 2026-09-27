@@ -1,0 +1,6 @@
+{
+  "name": "Nexus-Memory-Fabric | Autonomous Agent Memory OS & Graph Blueprint",
+  "description": "Apex-tier architectural blueprint, live memory topology graph, bitemporal truth engine, and contextual synthesis studio for next-gen agentic persistence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
