@@ -122,10 +122,28 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_memories_valid ON memories(valid_from, valid_to);
   `);
 
+  // Safely alter existing tables to add agent_id if not exists, and create indexes
+  try {
+    db.exec(`ALTER TABLE memories ADD COLUMN agent_id TEXT DEFAULT 'default';`);
+  } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE memory_events ADD COLUMN agent_id TEXT DEFAULT 'default';`);
+  } catch (e) {}
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_id, tier, lifecycle_state);`);
+  } catch (e) {}
+  try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_scope_agent ON memories(scope, agent_id);`);
+  } catch (e) {}
+
+
   // Initialize vector table
   try {
-    const { initVecTable } = require('./vectorStore');
-    initVecTable();
+    import('./vectorStore').then(({ initVecTable }) => {
+      initVecTable();
+    }).catch(err => {
+      console.warn('Vector table dynamic import failure:', err);
+    });
   } catch (err) {
     console.warn('Vector table initialization notice:', err);
   }

@@ -58,7 +58,7 @@ export const ProvenanceInspector: React.FC<ProvenanceInspectorProps> = ({
   };
 
   useEffect(() => {
-    if (selectedAnchor) {
+    if (selectedAnchor && selectedAnchor.verbatim_extract) {
       setIsTampered(false);
       setTamperedText('');
       runHashCheck(selectedAnchor.verbatim_extract);
@@ -67,8 +67,9 @@ export const ProvenanceInspector: React.FC<ProvenanceInspectorProps> = ({
   }, [selectedAnchorId, selectedAnchor]);
 
   const handleTamperToggle = async () => {
+    if (!selectedAnchor) return;
     if (!isTampered) {
-      const altered = selectedAnchor.verbatim_extract + ' [TAMPERED_GENERATIVE_HALLUCINATION_OR_DRIFT_ATTACK]';
+      const altered = (selectedAnchor.verbatim_extract || '') + ' [TAMPERED_GENERATIVE_HALLUCINATION_OR_DRIFT_ATTACK]';
       setTamperedText(altered);
       setIsTampered(true);
       await runHashCheck(altered);
@@ -82,7 +83,7 @@ export const ProvenanceInspector: React.FC<ProvenanceInspectorProps> = ({
     } else {
       setIsTampered(false);
       setTamperedText('');
-      await runHashCheck(selectedAnchor.verbatim_extract);
+      await runHashCheck(selectedAnchor.verbatim_extract || '');
       verifyWithBackend();
     }
   };

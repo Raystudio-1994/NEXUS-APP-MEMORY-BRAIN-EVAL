@@ -7,6 +7,7 @@ import { ScoringWeights, defaultWeights } from './apex/weights';
 import { upsertVector, knnSearch } from './vectorStore';
 import { kuzuUpsertMemory, kuzuCreateEdge } from './graphStore';
 import { globalContextCache } from './cache/contextCache';
+import * as fs from 'fs';
 
 /**
  * Normalizes string tags to an array.
@@ -19,7 +20,7 @@ function parseTags(tagsStr: string | null): string[] {
 /**
  * Gets all memories from SQLite database.
  */
-export function getMemories(lifecycle?: string, tier?: number): MemoryItem[] {
+export function getMemories(lifecycle?: string, tier?: number, agentId?: string): MemoryItem[] {
   let query = 'SELECT * FROM memories';
   const params: any[] = [];
   const conditions: string[] = [];
@@ -31,6 +32,10 @@ export function getMemories(lifecycle?: string, tier?: number): MemoryItem[] {
   if (tier) {
     conditions.push('tier = ?');
     params.push(tier);
+  }
+  if (agentId) {
+    conditions.push('agent_id = ?');
+    params.push(agentId);
   }
 
   if (conditions.length > 0) {
@@ -64,7 +69,8 @@ export function getMemories(lifecycle?: string, tier?: number): MemoryItem[] {
     embedding_vector: r.embedding_vector ? JSON.parse(r.embedding_vector) : undefined,
     vault_path: r.vault_path,
     procedure_spec: r.procedure_spec ? JSON.parse(r.procedure_spec) : undefined,
-    source_event_ids: r.source_event_ids ? r.source_event_ids.split(',') : []
+    source_event_ids: r.source_event_ids ? r.source_event_ids.split(',') : [],
+    agent_id: r.agent_id || 'default'
   }));
 }
 
@@ -99,7 +105,6 @@ export async function deleteMemoryCascade(id: string): Promise<boolean> {
   
   if (row?.vault_path) {
     try {
-      const fs = require('fs');
       if (fs.existsSync(row.vault_path)) {
         fs.unlinkSync(row.vault_path);
       }

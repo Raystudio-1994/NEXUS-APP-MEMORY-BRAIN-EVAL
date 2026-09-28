@@ -79,6 +79,8 @@ export async function rem_nightly_consolidation_pipeline(): Promise<{
   processed_count: number;
   decayed_count: number;
   synthesized_count: number;
+  procedural_count?: number;
+  procedures?: any[];
   clusters: Array<{ centroid: string; count: number; file: string }>;
 }> {
   console.log('REM Nightly Consolidation cycle starting...');

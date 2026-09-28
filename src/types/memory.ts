@@ -43,6 +43,7 @@ export interface MemoryEvent {
   session_id?: string;
   actor_id?: string;
   confidence: number;
+  agent_id?: string;
 }
 
 export interface MemoryItem {
@@ -80,6 +81,7 @@ export interface MemoryItem {
     then_action: string;
     expected_result: string;
   };
+  agent_id?: string;
 }
 
 export interface GraphEdge {

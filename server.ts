@@ -19,12 +19,28 @@ import { nexusTools } from './server/mcp/tools';
 import { initKuzu } from './server/graphStore';
 import cron from 'node-cron';
 
+// Ambient Sensors + CRDT Multi-Agent Sync Imports
+import { startFileWatcher } from './server/sensors/fileWatcher';
+import { installPtyHook } from './server/sensors/pty';
+import { getYDoc, getSyncState, applySyncUpdate, loadYDoc, persistYDoc } from './server/sync/crdt';
+import { listAgents } from './server/sync/multiAgent';
+import { rateLimit } from './server/middleware/rateLimit';
+
 dotenv.config();
 
 async function startServer() {
   // Initialize Database Sync
   const sqliteDb = initDb();
   await initKuzu();
+  
+  // Load local CRDT doc state
+  loadYDoc();
+
+  // Boot Ambient Sensors
+  if (process.env.NEXUS_SENSORS !== '0') {
+    startFileWatcher();
+    installPtyHook();
+  }
   
   const app = express();
 
@@ -36,6 +52,9 @@ async function startServer() {
     origin: '*' // Allow all origins in the preview development sandbox
   }));
 
+  // Rate Limiting MiddleWare
+  app.use(rateLimit);
+
   app.use(express.json({ limit: '5mb' }));
 
   app.get('/health', (req, res) => {
@@ -44,6 +63,53 @@ async function startServer() {
 
   // Register Core API endpoints
   app.use('/api/memory', memoryRoutes);
+
+  // Sensor Status endpoint
+  app.get('/api/sensors/status', (req, res) => {
+    try {
+      const { isWatcherActive } = require('./server/sensors/fileWatcher');
+      res.json({
+        fileWatcher: isWatcherActive(),
+        ptyHook: process.env.NEXUS_PTY_HOOK === '1'
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to query sensor status', details: err.message });
+    }
+  });
+
+  // Sync pull endpoint
+  app.get('/api/sync/pull', (req, res) => {
+    try {
+      res.json({ update: Buffer.from(getSyncState()).toString('base64') });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Sync pull failed', details: err.message });
+    }
+  });
+
+  // Sync push endpoint
+  app.post('/api/sync/push', (req, res) => {
+    try {
+      const { update } = req.body;
+      if (!update) {
+        return res.status(400).json({ error: 'Missing update data' });
+      }
+      const upd = Buffer.from(update, 'base64');
+      applySyncUpdate(new Uint8Array(upd));
+      persistYDoc();
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Sync push failed', details: err.message });
+    }
+  });
+
+  // Agents list endpoint
+  app.get('/api/agents', (req, res) => {
+    try {
+      res.json({ agents: listAgents() });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to list agents', details: err.message });
+    }
+  });
 
   // Extract endpoint
   app.post('/api/extract', async (req, res) => {

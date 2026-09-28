@@ -1,0 +1,28 @@
+name: Nexus CI
+
+on: [push, pull_request]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Lint and type-check
+        run: bun run lint
+
+      - name: Build production bundle
+        run: bun run build
+
+      - name: Self-test running server
+        run: |
+          rm -f data/nexus.db
+          timeout 15 bun --bun run tsx server.ts &
+          sleep 8
+          curl -f http://localhost:3000/health
+          curl -f http://localhost:3000/api/mcp/tools | grep nexus_search_memory

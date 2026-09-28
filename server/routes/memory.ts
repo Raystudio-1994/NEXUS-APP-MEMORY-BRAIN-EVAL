@@ -1,18 +1,15 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { getMemories, deleteMemoryCascade, getGraphCentrality } from '../memoryService';
-import { getEmbedding, generateFallbackEmbedding } from '../embeddings';
-import { upsertVector } from '../vectorStore';
-import { kuzuUpsertMemory, kuzuCreateEdge } from '../graphStore';
 
 const router = Router();
 
 // GET /api/memory - List memories with optional filtering
 router.get('/', (req: Request, res: Response) => {
   try {
-    const { lifecycle_state, tier } = req.query;
+    const { lifecycle_state, tier, agent_id } = req.query;
     const tierNum = tier ? parseInt(tier as string, 10) : undefined;
-    const results = getMemories(lifecycle_state as string, tierNum);
+    const results = getMemories(lifecycle_state as string, tierNum, agent_id as string);
     res.json(results);
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to retrieve memories', details: err.message });
@@ -61,7 +58,7 @@ router.get('/anchors', (req: Request, res: Response) => {
 });
 
 // POST /api/memory - Directly create a memory entry
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', (req: Request, res: Response) => {
   try {
     const { id: reqId, title, tier, statement, subject, predicate, object, confidence, importance, stability, tags, scope, source_event_ids } = req.body;
     
@@ -74,7 +71,6 @@ router.post('/', async (req: Request, res: Response) => {
     const tagsStr = Array.isArray(tags) ? tags.join(',') : (tags || '');
     const tierName = { 1: 'working', 2: 'episodic', 3: 'semantic', 4: 'procedural' }[tier as 1|2|3|4] || 'working';
     const sourceEvents = Array.isArray(source_event_ids) ? source_event_ids.join(',') : (source_event_ids || '');
-    const embedding = await getEmbedding(statement);
 
     const insertStmt = db.prepare(`
       INSERT INTO memories (id, title, tier, tier_name, statement, subject, predicate, object, confidence, importance, stability, observed_at, valid_from, valid_to, lifecycle_state, tags, scope, access_count, last_accessed, tokens, embedding_vector, vault_path, procedure_spec, source_event_ids)
@@ -102,19 +98,11 @@ router.post('/', async (req: Request, res: Response) => {
       1,
       now,
       Math.ceil(statement.length / 3.8),
-      JSON.stringify(embedding),
+      JSON.stringify(new Array(768).fill(0).map(() => Math.random())), // placeholder embedding for manual inputs
       null,
       null,
       sourceEvents
     ]);
-
-    upsertVector(id, embedding);
-    await kuzuUpsertMemory({
-      id,
-      statement,
-      tier,
-      subject: subject || ''
-    });
 
     res.status(201).json({ success: true, id });
   } catch (err: any) {
@@ -123,7 +111,7 @@ router.post('/', async (req: Request, res: Response) => {
 });
 
 // POST /api/memory/links - Connect two memory nodes manually
-router.post('/links', async (req: Request, res: Response) => {
+router.post('/links', (req: Request, res: Response) => {
   try {
     const { source, target, relation_type, weight } = req.body;
     if (!source || !target || !relation_type) {
@@ -135,9 +123,7 @@ router.post('/links', async (req: Request, res: Response) => {
       INSERT INTO memory_links (id, source, target, relation_type, weight, valid_from)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
-    const edgeWeight = weight || 1.0;
-    insertStmt.run(id, source, target, relation_type, edgeWeight, new Date().toISOString());
-    await kuzuCreateEdge(source, target, relation_type, edgeWeight);
+    insertStmt.run(id, source, target, relation_type, weight || 1.0, new Date().toISOString());
     res.json({ success: true, id });
   } catch (err: any) {
     res.status(500).json({ error: 'Failed to create graph edge', details: err.message });
